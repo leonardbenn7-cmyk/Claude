@@ -246,6 +246,29 @@ async function eventAdd({title,start,end,location}){
       return {ok:true,ort:'Google Kalender',id:r.id}; }catch(e){ console.warn(e); } }
   const ev = {id:'l'+nid(),title,start,end,location}; S.events.push(ev); save(); return {ok:true,ort:'lokaler Kalender',id:ev.id}; }
 
+// ================= Apple Kalender (.ics) =================
+const icsEsc = t => String(t||'').replace(/\\/g,'\\\\').replace(/[,;]/g,m=>'\\'+m).replace(/\r?\n/g,'\\n');
+const icsUTC = d => new Date(d).toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'');
+function icsFor(ev){
+  const allDay = String(ev.start).length<=10;
+  const end = ev.end || (allDay ? null : new Date(new Date(ev.start).getTime()+3600e3).toISOString());
+  const L = ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Jarvis//DE','CALSCALE:GREGORIAN','METHOD:PUBLISH','BEGIN:VEVENT',
+    'UID:jarvis-'+Date.now()+'-'+Math.random().toString(36).slice(2)+'@jarvis','DTSTAMP:'+icsUTC(new Date())];
+  if(allDay){ const d=String(ev.start).replace(/-/g,''); const e=new Date(ev.end||ev.start); if(!ev.end) e.setDate(e.getDate()+1);
+    L.push('DTSTART;VALUE=DATE:'+d,'DTEND;VALUE=DATE:'+e.toLocaleDateString('sv-SE').replace(/-/g,'')); }
+  else L.push('DTSTART:'+icsUTC(ev.start),'DTEND:'+icsUTC(end));
+  L.push('SUMMARY:'+icsEsc(ev.title));
+  if(ev.location) L.push('LOCATION:'+icsEsc(ev.location));
+  L.push('BEGIN:VALARM','TRIGGER:-PT30M','ACTION:DISPLAY','DESCRIPTION:'+icsEsc(ev.title),'END:VALARM','END:VEVENT','END:VCALENDAR');
+  return L.join('\r\n'); }
+function toApple(ev){
+  const a=document.createElement('a'); a.href='data:text/calendar;charset=utf-8,'+encodeURIComponent(icsFor(ev));
+  a.download=(ev.title||'termin').replace(/[^\wäöüÄÖÜß -]/g,'').slice(0,40)+'.ics'; document.body.appendChild(a); a.click(); a.remove(); }
+const appleBtn = i => `<button class="btn sec small" data-apple="${i}" style="padding:6px 10px">📅 Apple</button>`;
+let evCache = [];
+function addAppleChip(ev){ const i=evCache.push(ev)-1; const d=document.createElement('div'); d.className='m t';
+  d.innerHTML=`📅 ${esc(ev.title)} · ${fmtDT(ev.start)} ${appleBtn(i)}`; $('msgs').appendChild(d); $('msgs').scrollTop=1e9; }
+
 // ================= Werkzeuge für Claude =================
 const TOOLS = [
  {name:'add_task',description:'Neue Aufgabe/Hausaufgabe/Erledigung anlegen.',input_schema:{type:'object',properties:{title:{type:'string'},category:{type:'string',enum:['Hausaufgabe','Erledigung','Lernen','Privat','Sonstiges']},due:{type:'string',description:'YYYY-MM-DD'},notes:{type:'string'}},required:['title']}},
@@ -317,6 +340,7 @@ async function ask(text, {show=true, speakIt=S.settings.voice, temp=false}={}){
       for(const c of j.content.filter(c=>c.type==='tool_use')){
         status('Arbeite: '+c.name,true); if(show) addMsg('t','⚙️ '+toolLabel(c.name));
         let out; try{ out = await runTool(c.name,c.input); }catch(e){ out={fehler:e.message}; }
+        if(c.name==='add_event' && show && out && out.ok) addAppleChip(c.input);
         results.push({type:'tool_result',tool_use_id:c.id,content:JSON.stringify(out).slice(0,12000)}); }
       msgs.push({role:'user',content:results});
     }
@@ -439,11 +463,12 @@ function render(){
   $('briefOut').innerHTML = S.briefing.text && S.briefing.date===todayStr() ? md(S.briefing.text) : 'Noch kein Briefing heute. Tipp oben auf „Briefing".';
   const s=S.settings; $('sName').value=s.name; $('sAbout').value=s.about; $('sBrief').value=s.brief; $('sBriefCall').checked=s.briefCall; $('sCallImp').checked=s.callImp; $('sVoice').checked=s.voice; $('sKey').value=s.key; $('sModel').value=s.model; $('sGid').value=s.gid;
   $('gState').textContent = gReady()?'✅ verbunden':(s.gid?'nicht verbunden':''); }
-document.body.addEventListener('click',e=>{ const d=e.target.closest('[data-done]'), x=e.target.closest('[data-del]');
+document.body.addEventListener('click',e=>{ const d=e.target.closest('[data-done]'), x=e.target.closest('[data-del]'), ap=e.target.closest('[data-apple]');
+  if(ap){ toApple(evCache[ap.dataset.apple]); return; }
   if(d){ const t=S.tasks.find(t=>t.id==d.dataset.done); t.done=!t.done; save(); render(); }
   if(x){ S.tasks=S.tasks.filter(t=>t.id!=x.dataset.del); save(); render(); } });
 async function loadEvents(){ const from=new Date(); from.setHours(0,0,0,0); const to=new Date(from.getTime()+7*864e5); const end=new Date(from.getTime()+864e5);
-  const evs = await eventsList(from,to); const li = e=>`<div class="item"><div class="t">${esc(e.title)}<div class="s">${fmtDT(e.start)}${e.location?' · '+esc(e.location):''} <span class="tag">${e.quelle}</span></div></div></div>`;
+  const evs = await eventsList(from,to); const li = e=>`<div class="item"><div class="t">${esc(e.title)}<div class="s">${fmtDT(e.start)}${e.location?' · '+esc(e.location):''} <span class="tag">${e.quelle}</span></div></div>${appleBtn(evCache.push(e)-1)}</div>`;
   $('eventList').innerHTML = evs.map(li).join('')||'<p class="hint">Keine Termine.</p>';
   $('todayEvents').innerHTML = evs.filter(e=>new Date(e.start)<end).map(li).join('')||'<p class="hint">Keine Termine heute.</p>'; }
 async function loadMail(){ const el=$('mailList'); if(!gReady()){ el.innerHTML='<p class="hint">Google nicht verbunden (⚙️ Setup).</p>'; return; } el.innerHTML='Lade …';
@@ -453,7 +478,8 @@ $('mailList').onclick = e => { const b=e.target.closest('[data-mail]'); if(!b) r
   ask(b.dataset.act==='sum' ? `Lies die E-Mail mit der ID ${b.dataset.mail} und fass sie kurz zusammen. Sag mir, ob ich was tun muss.` : `Lies die E-Mail mit der ID ${b.dataset.mail} und entwirf eine passende Antwort. Zeig mir den Entwurf und frag, ob du sie senden sollst.`); };
 $('mailRefresh').onclick = loadMail;
 $('tAdd').onclick = () => { const t=$('tTitle').value.trim(); if(!t) return; S.tasks.push({id:nid(),title:t,category:$('tCat').value,due:$('tDue').value,notes:'',done:false,created:Date.now()}); $('tTitle').value=''; save(); render(); };
-$('eAdd').onclick = async () => { const t=$('eTitle').value.trim(), s=$('eStart').value; if(!t||!s) return alert('Titel und Beginn fehlen.'); const r=await eventAdd({title:t,start:s,end:$('eEnd').value||undefined}); $('eTitle').value=''; alert('Eingetragen in: '+r.ort); loadEvents(); };
+$('eAdd').onclick = async () => { const t=$('eTitle').value.trim(), s=$('eStart').value; if(!t||!s) return alert('Titel und Beginn fehlen.'); const ev={title:t,start:s,end:$('eEnd').value||undefined}; const r=await eventAdd(ev); $('eTitle').value=''; loadEvents();
+  if(confirm('Eingetragen in: '+r.ort+'.\n\nAuch in den Apple Kalender übernehmen?')) toApple(ev); };
 $('saveSet').onclick = () => { const s=S.settings; const gidOld=s.gid; Object.assign(s,{name:$('sName').value.trim()||'Chef',about:$('sAbout').value,brief:$('sBrief').value||'07:00',briefCall:$('sBriefCall').checked,callImp:$('sCallImp').checked,voice:$('sVoice').checked,key:$('sKey').value.trim(),model:$('sModel').value,gid:$('sGid').value.trim()}); if(gidOld!==s.gid) gClient=null; save(); alert('Gespeichert, '+s.name+'.'); renderHistory(); };
 $('gConnect').onclick = async () => { $('saveSet').click(); try{ await gConnect('consent'); loadMail(); }catch(e){ alert(e.message); } };
 $('testCall').onclick = () => startCall(`Test, Test. Hier ist JARVIS, ${S.settings.name||'Chef'}. Die Leitung steht. Was kann ich für Sie tun?`);
