@@ -138,6 +138,13 @@ label{display:block;font-size:13px;color:var(--dim);margin:10px 0 4px}
       <label><input type="checkbox" id="sCallImp" style="width:auto"> Bei wichtigen neuen E-Mails anrufen</label>
       <label><input type="checkbox" id="sVoice" style="width:auto"> Antworten vorlesen</label>
     </div>
+    <div class="card"><h3>🗣 Stimme</h3>
+      <label>Stimme</label><select id="sVoiceName"></select>
+      <label>Tempo</label><select id="sRate"><option value="0.9">langsam</option><option value="1">normal</option><option value="1.1">etwas schneller</option><option value="1.2">schnell</option></select>
+      <div class="row" style="margin-top:10px"><button class="btn sec" id="voiceTest">▶︎ Probe hören</button></div>
+      <p class="hint" id="voiceInfo"></p>
+      <p class="hint"><b>Bessere Männerstimme (iPhone):</b> Einstellungen → Bedienungshilfen → Gesprochene Inhalte → Stimmen → Deutsch → <b>Martin</b> → die Version „Premium" oder „Erweitert" laden. Danach Jarvis neu öffnen und hier „Martin (Premium)" wählen.</p>
+    </div>
     <div class="card"><h3>🧠 Claude (das Gehirn)</h3>
       <label>Anthropic API-Key</label><input id="sKey" type="password" placeholder="sk-ant-…">
       <label>Modell</label><select id="sModel"><option value="claude-sonnet-5-5">Sonnet 5.5 (empfohlen)</option><option value="claude-haiku-5-5">Haiku 5.5 (billiger, schneller)</option><option value="claude-opus-5-5">Opus 5.5 (am schlausten, teuer)</option></select>
@@ -176,7 +183,7 @@ label{display:block;font-size:13px;color:var(--dim);margin:10px 0 4px}
 <script>
 // ================= Speicher =================
 const $ = id => document.getElementById(id);
-const DEF = {settings:{name:'Chef',about:'',brief:'07:00',briefCall:false,callImp:true,voice:true,key:'',model:'claude-sonnet-5-5',gid:''},
+const DEF = {settings:{name:'Chef',about:'',brief:'07:00',briefCall:false,callImp:true,voice:true,voiceName:'',rate:1,key:'',model:'claude-sonnet-5-5',gid:''},
   tasks:[],events:[],reminders:[],history:[],briefing:{date:'',text:''},seenMails:[],nextId:1};
 let S;
 try{ S = Object.assign(structuredClone(DEF), JSON.parse(localStorage.getItem('jarvis')||'{}')); S.settings = Object.assign({},DEF.settings,S.settings);}catch(e){ S = structuredClone(DEF); }
@@ -364,7 +371,18 @@ $('send').onclick = () => { const t=$('inp').value.trim(); if(!t) return; $('inp
 $('inp').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); $('send').click(); } });
 
 // ================= Sprache =================
-let voices=[]; const loadVoices=()=>voices=speechSynthesis.getVoices(); if(window.speechSynthesis){ loadVoices(); speechSynthesis.onvoiceschanged=loadVoices; }
+let voices=[]; const loadVoices=()=>voices=speechSynthesis.getVoices(); if(window.speechSynthesis){ loadVoices(); speechSynthesis.onvoiceschanged=()=>{ loadVoices(); fillVoiceSelect(); }; }
+const MALE = /martin|yannick|markus|conrad|hans|stefan|eddy|reed|rocko|grandpa|opa|daniel|thomas|klaus|male|mann/i;
+const FEMALE = /anna|helena|petra|katja|marlene|vicki|sandy|shelley|grandma|oma|female|frau/i;
+const quality = v => /premium/i.test(v.name)?3 : /erweitert|enhanced|natural|neural|online/i.test(v.name)?2 : 1;
+function deVoices(){ return voices.filter(v=>/^de/i.test(v.lang)); }
+function pickVoice(){ const de=deVoices(); if(!de.length) return null;
+  if(S.settings.voiceName){ const v=de.find(v=>v.name===S.settings.voiceName); if(v) return v; }
+  const male=de.filter(v=>MALE.test(v.name)&&!FEMALE.test(v.name)).sort((a,b)=>quality(b)-quality(a));
+  return male[0] || de.filter(v=>!FEMALE.test(v.name)).sort((a,b)=>quality(b)-quality(a))[0] || de[0]; }
+function fillVoiceSelect(){ const sel=$('sVoiceName'); if(!sel) return; const de=deVoices(); const cur=S.settings.voiceName;
+  sel.innerHTML='<option value="">Automatisch (männlich bevorzugt)</option>'+de.map(v=>`<option ${v.name===cur?'selected':''}>${esc(v.name)}</option>`).join('');
+  $('voiceInfo').textContent = de.length ? `${de.length} deutsche Stimmen gefunden. Aktiv: ${pickVoice()?.name||'Standard'}` : 'Noch keine Stimmen geladen – App einmal neu öffnen.'; }
 let speechOK=false;
 function unlockSpeech(){ if(speechOK || !window.speechSynthesis) return; try{ const u=new SpeechSynthesisUtterance(' '); u.volume=0; speechSynthesis.speak(u); speechSynthesis.resume(); speechOK=true; }catch(e){} }
 ['touchend','click','keydown'].forEach(ev=>document.addEventListener(ev,unlockSpeech,{capture:true}));
@@ -372,10 +390,11 @@ let speakId=0;
 function speak(t){ return new Promise(res=>{ if(!window.speechSynthesis || !t) return res(); const my=++speakId; speechSynthesis.cancel();
   const clean = t.replace(/[*#_`]/g,'').replace(/[\u{1F300}-\u{1FAFF}☀-➿️]/gu,'').replace(/\s+/g,' ').trim();
   // in kurze Stücke teilen – lange Texte bricht Chrome sonst nach ~15 s ab
-  const parts = clean.match(/[^.!?]+[.!?]*\s*/g)?.reduce((a,x)=>{ if(a.length && (a[a.length-1]+x).length<180) a[a.length-1]+=x; else a.push(x); return a; },[]) || [clean];
-  const de = voices.filter(v=>v.lang.startsWith('de')); const voice = de.find(v=>/male|mann|markus|yannick|conrad|daniel/i.test(v.name))||de[0]||null;
+  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+  const parts = (isIOS || clean.length<400) ? [clean] : (clean.match(/[^.!?]+[.!?]*\s*/g)||[clean]).reduce((a,x)=>{ if(a.length && (a[a.length-1]+x).length<400) a[a.length-1]+=x; else a.push(x); return a; },[]);
+  const voice = pickVoice();
   let k=0; const next=()=>{ if(my!==speakId || k>=parts.length) return res();
-    const u = new SpeechSynthesisUtterance(parts[k++]); u.lang='de-DE'; u.rate=1.05; u.pitch=0.9; if(voice) u.voice=voice;
+    const u = new SpeechSynthesisUtterance(parts[k++]); u.lang=voice?.lang||'de-DE'; u.rate=+S.settings.rate||1; u.pitch=1; if(voice) u.voice=voice;
     u.onend=next; u.onerror=next; speechSynthesis.speak(u); };
   setTimeout(next,80); }); }
 function stopSpeak(){ speakId++; try{ speechSynthesis.cancel(); }catch(e){} }
@@ -475,7 +494,7 @@ function render(){
   const due = open.filter(t=>t.due && t.due<=todayStr());
   $('todayTasks').innerHTML = due.map(taskHTML).join('')||'<p class="hint">Heute nichts fällig.</p>';
   $('briefOut').innerHTML = S.briefing.text && S.briefing.date===todayStr() ? md(S.briefing.text) : 'Noch kein Briefing heute. Tipp oben auf „Briefing".';
-  const s=S.settings; $('sName').value=s.name; $('sAbout').value=s.about; $('sBrief').value=s.brief; $('sBriefCall').checked=s.briefCall; $('sCallImp').checked=s.callImp; $('sVoice').checked=s.voice; $('sKey').value=s.key; $('sModel').value=s.model; $('sGid').value=s.gid;
+  const s=S.settings; $('sName').value=s.name; $('sAbout').value=s.about; $('sBrief').value=s.brief; $('sBriefCall').checked=s.briefCall; $('sCallImp').checked=s.callImp; $('sVoice').checked=s.voice; $('sRate').value=String(s.rate||1); fillVoiceSelect(); $('sKey').value=s.key; $('sModel').value=s.model; $('sGid').value=s.gid;
   $('gState').textContent = gReady()?'✅ verbunden':(s.gid?'nicht verbunden':''); }
 document.body.addEventListener('click',e=>{ const d=e.target.closest('[data-done]'), x=e.target.closest('[data-del]'), ap=e.target.closest('[data-apple]');
   if(ap){ toApple(evCache[ap.dataset.apple]); return; }
@@ -494,8 +513,10 @@ $('mailRefresh').onclick = loadMail;
 $('tAdd').onclick = () => { const t=$('tTitle').value.trim(); if(!t) return; S.tasks.push({id:nid(),title:t,category:$('tCat').value,due:$('tDue').value,notes:'',done:false,created:Date.now()}); $('tTitle').value=''; save(); render(); };
 $('eAdd').onclick = async () => { const t=$('eTitle').value.trim(), s=$('eStart').value; if(!t||!s) return alert('Titel und Beginn fehlen.'); const ev={title:t,start:s,end:$('eEnd').value||undefined}; const r=await eventAdd(ev); $('eTitle').value=''; loadEvents();
   if(confirm('Eingetragen in: '+r.ort+'.\n\nAuch in den Apple Kalender übernehmen?')) toApple(ev); };
-$('saveSet').onclick = () => { const s=S.settings; const gidOld=s.gid; Object.assign(s,{name:$('sName').value.trim()||'Chef',about:$('sAbout').value,brief:$('sBrief').value||'07:00',briefCall:$('sBriefCall').checked,callImp:$('sCallImp').checked,voice:$('sVoice').checked,key:$('sKey').value.trim(),model:$('sModel').value,gid:$('sGid').value.trim()}); if(gidOld!==s.gid) gClient=null; save(); alert('Gespeichert, '+s.name+'.'); renderHistory(); voiceIcon(); };
+$('saveSet').onclick = () => { const s=S.settings; const gidOld=s.gid; Object.assign(s,{name:$('sName').value.trim()||'Chef',about:$('sAbout').value,brief:$('sBrief').value||'07:00',briefCall:$('sBriefCall').checked,callImp:$('sCallImp').checked,voice:$('sVoice').checked,voiceName:$('sVoiceName').value,rate:+$('sRate').value||1,key:$('sKey').value.trim(),model:$('sModel').value,gid:$('sGid').value.trim()}); if(gidOld!==s.gid) gClient=null; save(); alert('Gespeichert, '+s.name+'.'); renderHistory(); voiceIcon(); };
 $('gConnect').onclick = async () => { $('saveSet').click(); try{ await gConnect('consent'); loadMail(); }catch(e){ alert(e.message); } };
+$('voiceTest').onclick = () => { const o={...S.settings}; S.settings.voiceName=$('sVoiceName').value; S.settings.rate=+$('sRate').value||1;
+  speak(`Guten Tag, ${S.settings.name||'Chef'}. Ich bin JARVIS. Alle Systeme laufen, und Ihre Hausaufgaben warten bereits.`).then(()=>{ S.settings.voiceName=o.voiceName; S.settings.rate=o.rate; }); };
 $('testCall').onclick = () => startCall(`Test, Test. Hier ist JARVIS, ${S.settings.name||'Chef'}. Die Leitung steht. Was kann ich für Sie tun?`);
 $('clearChat').onclick = () => { if(confirm('Chat-Verlauf wirklich löschen?')){ S.history=[]; save(); renderHistory(); } };
 
