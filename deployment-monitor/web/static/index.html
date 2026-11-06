@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deployment Monitor</title>
+<style>
+:root{--bg:#f6f6f4;--card:#fff;--text:#1d1d1b;--muted:#6b6b66;--line:#e2e2dd;--accent:#c4552d;--ok:#2f7d4f;--bad:#b3261e;--sel:#fbeee8}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#21211f;--text:#ecebe6;--muted:#9a9993;--line:#33332f;--accent:#e07a52;--ok:#5bbf86;--bad:#ef7b72;--sel:#33241d}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,sans-serif}
+main{max-width:640px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:4px 0 2px}
+.sub{color:var(--muted);font-size:13px;margin:0 0 16px;word-break:break-all}
+h2{font-size:14px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:20px 0 8px;display:flex;justify-content:space-between;align-items:center}
+button{font:inherit;cursor:pointer}
+.link{background:none;border:0;color:var(--accent);font-size:14px;padding:4px}
+.runs{display:flex;flex-direction:column;gap:6px}
+.run{display:flex;justify-content:space-between;gap:8px;align-items:center;text-align:left;width:100%;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--text)}
+.run[aria-pressed=true]{border-color:var(--accent);background:var(--sel)}
+.run:disabled{opacity:.6;cursor:default}
+.when{font-weight:600}
+.sid{color:var(--muted);font-size:12px;word-break:break-all}
+.tag{font-size:12px;padding:2px 8px;border-radius:99px;white-space:nowrap;border:1px solid currentColor}
+.tag.ok{color:var(--ok)}.tag.bad{color:var(--bad)}
+textarea{width:100%;min-height:80px;font:inherit;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--text);resize:vertical}
+.send{margin-top:8px;width:100%;padding:12px;border:0;border-radius:10px;background:var(--accent);color:#fff;font-weight:600}
+.send:disabled{opacity:.5}
+.out{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;min-height:60px;white-space:pre-wrap;word-wrap:break-word}
+.out:empty::before{content:"Die Antwort des Agents erscheint hier.";color:var(--muted)}
+.note{font-size:13px;color:var(--muted);margin:6px 0 0}
+.note.err{color:var(--bad)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Deployment Monitor</h1>
+  <p class="sub" id="dep">Lade…</p>
+
+  <h2>Runs <button class="link" id="reload">Neu laden</button></h2>
+  <div class="runs" id="runs"></div>
+  <p class="note" id="runsNote"></p>
+
+  <h2>Nachricht an den Agent</h2>
+  <textarea id="msg" placeholder="z. B. Was hast du gefunden?">Gib mir ein kurzes Status-Update zu diesem Run.</textarea>
+  <button class="send" id="send" disabled>Senden</button>
+
+  <h2>Antwort</h2>
+  <div class="out" id="out"></div>
+  <p class="note" id="status"></p>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let selected = null, busy = false;
+
+function fmt(iso){ const d = new Date(iso); return isNaN(d) ? iso : d.toLocaleString("de-DE",{dateStyle:"medium",timeStyle:"short"}); }
+function setStatus(text, err){ $("status").textContent = text || ""; $("status").className = "note" + (err ? " err" : ""); }
+function updateSend(){ $("send").disabled = busy || !selected || !$("msg").value.trim(); }
+
+async function loadRuns(){
+  $("runs").innerHTML = ""; $("runsNote").textContent = "Lade Runs…"; $("runsNote").className = "note";
+  try{
+    const r = await fetch("/api/runs"); const data = await r.json();
+    if(!r.ok) throw new Error(data.error || r.status);
+    $("dep").textContent = data.deployment_id;
+    $("runsNote").textContent = data.runs.length ? "" : "Noch keine Runs.";
+    selected = null;
+    data.runs.forEach(run => {
+      const b = document.createElement("button");
+      b.className = "run"; b.disabled = !run.session_id; b.setAttribute("aria-pressed","false");
+      b.innerHTML = `<span><div class="when"></div><div class="sid"></div></span><span class="tag"></span>`;
+      b.querySelector(".when").textContent = fmt(run.created_at);
+      b.querySelector(".sid").textContent = run.session_id || run.id;
+      const tag = b.querySelector(".tag");
+      tag.textContent = run.session_id ? "Session" : "Fehlgeschlagen: " + run.error;
+      tag.classList.add(run.session_id ? "ok" : "bad");
+      b.onclick = () => select(run.session_id, b);
+      $("runs").appendChild(b);
+      if(!selected && run.session_id) select(run.session_id, b);
+    });
+  }catch(e){ $("runsNote").textContent = "Konnte Runs nicht laden: " + e.message; $("runsNote").className = "note err"; }
+  updateSend();
+}
+
+function select(sid, btn){
+  selected = sid;
+  document.querySelectorAll(".run").forEach(x => x.setAttribute("aria-pressed", String(x === btn)));
+  updateSend();
+}
+
+async function send(){
+  busy = true; updateSend(); $("out").textContent = ""; setStatus("Agent arbeitet…");
+  try{
+    const r = await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({session_id:selected,message:$("msg").value})});
+    if(!r.ok){ const d = await r.json().catch(()=>({})); throw new Error(d.error || r.status); }
+    const reader = r.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for(;;){
+      const {value, done} = await reader.read(); if(done) break;
+      buf += dec.decode(value,{stream:true});
+      let i; while((i = buf.indexOf("\n")) >= 0){
+        const ev = JSON.parse(buf.slice(0,i)); buf = buf.slice(i+1);
+        if(ev.type === "text") $("out").textContent += ev.text;
+        else if(ev.type === "status") setStatus(ev.text);
+        else if(ev.type === "error") setStatus(ev.text, true);
+        else if(ev.type === "done") setStatus(ev.reason === "end_turn" ? "Fertig." : "Beendet: " + ev.reason, ev.reason !== "end_turn");
+      }
+    }
+  }catch(e){ setStatus("Fehler: " + e.message, true); }
+  busy = false; updateSend();
+}
+
+$("reload").onclick = loadRuns;
+$("send").onclick = send;
+$("msg").oninput = updateSend;
+loadRuns();
+</script>
+</body>
+</html>
