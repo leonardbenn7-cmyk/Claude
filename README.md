@@ -1,3 +1,3 @@
 # Claude
 
-- [HabitTracker](HabitTracker/README.md): Habit Tracker für iPhone und iPad mit iCloud-Sync, Statistik und Apple-Health-Übersicht
+- [HabitTracker](HabitTracker/README.md): Habit Tracker fürs iPad mit Statistik und Apple-Health-Übersicht
