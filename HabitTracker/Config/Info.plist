@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Die App liest deine Schritte, Aktivität, Herzfrequenz und deinen Schlaf aus Apple Health, um sie dir übersichtlich anzuzeigen.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Die App schreibt keine Daten in Apple Health.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+</dict>
+</plist>
